@@ -1,0 +1,13 @@
+# Default location: ~/.config/mnemo/config.toml
+# Environment variables override these values. Explicit CLI flags override both.
+
+hindsight_url = "https://your-hindsight-api.example.com"
+bank = "personal"
+language = "eng"
+model = "scribe_v2"
+# Defaults to ~/.local/state/mnemo/mnemo.sock
+# socket_path = "/Users/you/.local/state/mnemo/mnemo.sock"
+
+# Prefer setting API keys via MNEMO_* environment variables, but config file keys are supported.
+# elevenlabs_api_key = "..."
+# hindsight_api_key = "..."
