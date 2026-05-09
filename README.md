@@ -10,6 +10,35 @@ ElevenLabs, and stores the resulting text in Hindsight.
 - An ElevenLabs API key with Speech-to-Text access
 - A running Hindsight API endpoint
 
+## Platform Support
+
+`mnemo` currently publishes prebuilt releases for macOS Apple Silicon only.
+
+Supported target:
+
+- `aarch64-apple-darwin`
+
+Other platforms may work from source, but are not currently tested or packaged.
+
+## Installation
+
+Install with Homebrew:
+
+```bash
+brew tap Toady00/tap
+brew install mnemo
+```
+
+To install the latest development build from the default branch instead:
+
+```bash
+brew install --HEAD mnemo
+```
+
+Or install from a GitHub release by downloading the
+`mnemo-aarch64-apple-darwin.tar.gz` asset, extracting it, and moving `mnemo` to
+a directory on your `PATH`.
+
 ## Configuration
 
 The default config file location is:
@@ -218,7 +247,54 @@ live process, a second `record` command exits instead of trying to record from
 the microphone at the same time. If the socket is stale, `mnemo` removes it and
 continues.
 
-## Build A Release Binary
+## Release Process
+
+`mnemo` releases are currently built locally for macOS Apple Silicon and
+published through GitHub Releases.
+
+Before releasing, verify the project:
+
+```bash
+cargo fmt --check
+cargo test
+cargo clippy -- -D warnings
+```
+
+Build the release binary:
+
+```bash
+cargo build --release
+```
+
+Package the release asset:
+
+```bash
+mkdir -p dist
+cp target/release/mnemo dist/mnemo
+tar -czf dist/mnemo-aarch64-apple-darwin.tar.gz -C dist mnemo
+shasum -a 256 dist/mnemo-aarch64-apple-darwin.tar.gz
+```
+
+Create and push a signed release tag:
+
+```bash
+git tag -s v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
+
+Create the GitHub release:
+
+```bash
+gh release create v0.1.0 \
+  dist/mnemo-aarch64-apple-darwin.tar.gz \
+  --title "mnemo v0.1.0" \
+  --notes "Initial macOS Apple Silicon release."
+```
+
+After the release asset is published, update the Homebrew formula in
+`Toady00/homebrew-tap` with the new version URL and SHA-256 checksum.
+
+## Build A Local Binary
 
 Build an optimized local macOS binary:
 
@@ -230,24 +306,6 @@ The binary will be created at:
 
 ```bash
 target/release/mnemo
-```
-
-Run it directly:
-
-```bash
-./target/release/mnemo
-```
-
-Or explicitly:
-
-```bash
-./target/release/mnemo record
-```
-
-Stop it from another shell:
-
-```bash
-./target/release/mnemo stop
 ```
 
 Install it somewhere on your `PATH`, for example:

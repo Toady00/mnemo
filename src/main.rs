@@ -23,7 +23,10 @@ const DEFAULT_CONTEXT: &str = "user recorded voice memo";
 const DEFAULT_PROFILE: &str = "default";
 
 #[derive(Debug, Parser)]
-#[command(about = "Record your voice, transcribe with ElevenLabs, and retain in Hindsight")]
+#[command(
+    version,
+    about = "Record your voice, transcribe with ElevenLabs, and retain in Hindsight"
+)]
 struct CliArgs {
     #[command(subcommand)]
     command: Option<Command>,
@@ -439,7 +442,7 @@ fn read_file_config(path: &PathBuf) -> Result<FileConfig> {
         return Ok(FileConfig::default());
     }
 
-    let contents = fs::read_to_string(&path)
+    let contents = fs::read_to_string(path)
         .with_context(|| format!("failed to read config file {}", path.display()))?;
     toml::from_str(&contents)
         .with_context(|| format!("failed to parse config file {}", path.display()))

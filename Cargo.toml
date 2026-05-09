@@ -2,6 +2,12 @@
 name = "mnemo"
 version = "0.1.0"
 edition = "2024"
+description = "Record voice notes, transcribe them with ElevenLabs, and store them in Hindsight"
+license = "MIT"
+repository = "https://github.com/Toady00/mnemo"
+readme = "README.md"
+keywords = ["cli", "voice", "transcription", "notes"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 anyhow = "1.0.100"
