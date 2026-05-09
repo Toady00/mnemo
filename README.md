@@ -18,20 +18,37 @@ The default config file location is:
 ~/.config/mnemo/config.toml
 ```
 
-Create it from the example:
+Create a starter config:
+
+```bash
+mnemo init
+```
+
+Or create it from the example:
 
 ```bash
 mkdir -p ~/.config/mnemo
 cp config.example.toml ~/.config/mnemo/config.toml
 ```
 
+All configuration lives under a named profile. The default profile is
+`default`, and it is used when no profile is specified.
+
 Supported config keys:
 
 ```toml
+[profiles.default]
 hindsight_url = "https://your-hindsight-api.example.com"
 bank = "personal"
 language = "eng"
 model = "scribe_v2"
+context = "user recorded voice memo"
+
+# Optional Hindsight retain fields. Leave unset to send null.
+# metadata = { source = "mnemo" }
+# tags = ["voice-note"]
+# strategy = "append"
+
 # Defaults to ~/.local/state/mnemo/mnemo.sock
 # socket_path = "/Users/you/.local/state/mnemo/mnemo.sock"
 
@@ -49,16 +66,80 @@ built-in defaults < config.toml < environment variables < CLI flags
 `hindsight_url` is required for `mnemo record`. Set it in the config file,
 `MNEMO_HINDSIGHT_API_URL`, or `--hindsight-url`.
 
+`bank` and the ElevenLabs API key are also required for `mnemo record`. Set
+`bank` in the selected profile, `MNEMO_BANK_ID`, or `--bank`. Set the
+ElevenLabs API key with `MNEMO_ELEVENLABS_API_KEY`, `elevenlabs_api_key` in the
+selected profile, or `--elevenlabs-api-key`.
+
+## Profiles
+
+Profiles let you keep separate Hindsight destinations and retain settings in
+one config file. Each profile lives under `[profiles.<name>]`.
+
+Example:
+
+```toml
+[profiles.default]
+hindsight_url = "https://your-hindsight-api.example.com"
+bank = "personal"
+context = "user recorded voice memo"
+
+[profiles.business]
+hindsight_url = "https://your-hindsight-api.example.com"
+bank = "business"
+context = "user recorded business voice memo"
+tags = ["business", "voice-note"]
+strategy = "append"
+
+[profiles.family]
+hindsight_url = "https://your-hindsight-api.example.com"
+bank = "family"
+context = "user recorded family voice memo"
+metadata = { source = "mnemo", category = "family" }
+```
+
+Use the default profile:
+
+```bash
+mnemo record
+```
+
+Use a named profile:
+
+```bash
+mnemo record --profile business
+```
+
+Or select a profile with an environment variable:
+
+```bash
+export MNEMO_PROFILE="business"
+mnemo record
+```
+
+Profile values can still be overridden by `MNEMO_*` environment variables or
+CLI flags. For example, this records to the `business` profile but overrides
+the bank for one run:
+
+```bash
+mnemo record --profile business --bank temporary-business-notes
+```
+
 Supported environment variables:
 
 ```bash
 export MNEMO_ELEVENLABS_API_KEY="your-elevenlabs-key"
 export MNEMO_HINDSIGHT_API_KEY="your-hindsight-key-if-needed"
 export MNEMO_HINDSIGHT_API_URL="https://hindsight-api.example.com"
+export MNEMO_PROFILE="default"
 export MNEMO_BANK_ID="personal"
 export MNEMO_ELEVENLABS_LANGUAGE="eng"
 export MNEMO_ELEVENLABS_MODEL="scribe_v2"
 export MNEMO_SOCKET_PATH="$HOME/.local/state/mnemo/mnemo.sock"
+export MNEMO_CONTEXT="user recorded voice memo"
+export MNEMO_TAGS="voice-note,personal"
+export MNEMO_STRATEGY="append"
+export MNEMO_METADATA='{"source":"mnemo"}'
 ```
 
 ## Development
@@ -91,6 +172,18 @@ Override config from the CLI:
 
 ```bash
 cargo run -- --bank personal --language auto
+```
+
+Use a named profile:
+
+```bash
+cargo run -- record --profile business
+```
+
+Or with the installed binary:
+
+```bash
+mnemo record --profile business
 ```
 
 Set the Hindsight URL from the CLI:

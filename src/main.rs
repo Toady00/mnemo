@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io;
@@ -18,7 +19,8 @@ use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 
-const DEFAULT_BANK_ID: &str = "personal";
+const DEFAULT_CONTEXT: &str = "user recorded voice memo";
+const DEFAULT_PROFILE: &str = "default";
 
 #[derive(Debug, Parser)]
 #[command(about = "Record your voice, transcribe with ElevenLabs, and retain in Hindsight")]
@@ -30,6 +32,9 @@ struct CliArgs {
     config: Option<PathBuf>,
 
     #[arg(long, global = true)]
+    profile: Option<String>,
+
+    #[arg(long, global = true)]
     hindsight_url: Option<String>,
 
     #[arg(long, global = true)]
@@ -49,10 +54,28 @@ struct CliArgs {
 
     #[arg(long, global = true)]
     socket_path: Option<PathBuf>,
+
+    #[arg(long, global = true)]
+    context: Option<String>,
+
+    #[arg(long, global = true, value_delimiter = ',')]
+    tags: Vec<String>,
+
+    #[arg(long, global = true)]
+    strategy: Option<String>,
+
+    #[arg(long, global = true, value_name = "KEY=VALUE")]
+    metadata: Vec<String>,
 }
 
 #[derive(Clone, Debug, Subcommand)]
 enum Command {
+    /// Create the default configuration file.
+    Init {
+        /// Overwrite an existing configuration file.
+        #[arg(long)]
+        force: bool,
+    },
     /// Start recording a voice note.
     Record,
     /// Stop the currently running recorder.
@@ -60,7 +83,15 @@ enum Command {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileConfig {
+    #[serde(default)]
+    profiles: BTreeMap<String, ProfileConfig>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileConfig {
     hindsight_url: Option<String>,
     bank: Option<String>,
     language: Option<String>,
@@ -68,17 +99,26 @@ struct FileConfig {
     elevenlabs_api_key: Option<String>,
     hindsight_api_key: Option<String>,
     socket_path: Option<PathBuf>,
+    context: Option<String>,
+    metadata: Option<BTreeMap<String, String>>,
+    tags: Option<Vec<String>>,
+    strategy: Option<String>,
 }
 
 #[derive(Debug)]
 struct Config {
+    profile: String,
     hindsight_url: Option<String>,
-    bank: String,
+    bank: Option<String>,
     language: String,
     model: String,
     elevenlabs_api_key: Option<String>,
     hindsight_api_key: Option<String>,
     socket_path: PathBuf,
+    context: String,
+    metadata: Option<BTreeMap<String, String>>,
+    tags: Option<Vec<String>>,
+    strategy: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,23 +130,35 @@ struct ElevenLabsTranscription {
 async fn main() -> Result<()> {
     let args = CliArgs::parse();
     let command = args.command.clone().unwrap_or(Command::Record);
-    let config = Config::load(args)?;
+    if let Command::Init { force } = command {
+        return init_config(args.config.as_ref(), force);
+    }
 
+    let config = Config::load(args)?;
     match &command {
         Command::Record => record(config).await,
         Command::Stop => stop_recording(&config).await,
+        Command::Init { .. } => unreachable!(),
     }
 }
 
 async fn record(config: Config) -> Result<()> {
     let elevenlabs_api_key = config.elevenlabs_api_key.as_deref().ok_or_else(|| {
         anyhow!(
-            "MNEMO_ELEVENLABS_API_KEY must be set in the environment, config file, or --elevenlabs-api-key"
+            "MNEMO_ELEVENLABS_API_KEY must be set in the environment, profile '{}' in the config file, or --elevenlabs-api-key",
+            config.profile
         )
     })?;
     let hindsight_url = config.hindsight_url.as_deref().ok_or_else(|| {
         anyhow!(
-            "MNEMO_HINDSIGHT_API_URL must be set in the environment, config file, or --hindsight-url"
+            "MNEMO_HINDSIGHT_API_URL must be set in the environment, profile '{}' in the config file, or --hindsight-url",
+            config.profile
+        )
+    })?;
+    let bank = config.bank.as_deref().ok_or_else(|| {
+        anyhow!(
+            "MNEMO_BANK_ID must be set in the environment, profile '{}' in the config file, or --bank",
+            config.profile
         )
     })?;
     ensure_singleton_socket(&config.socket_path)?;
@@ -135,11 +187,8 @@ async fn record(config: Config) -> Result<()> {
     }
 
     println!("\nTranscription: {transcript}");
-    println!(
-        "Retaining transcript in Hindsight bank '{}'...",
-        config.bank
-    );
-    retain_in_hindsight(&config, hindsight_url, transcript).await?;
+    println!("Retaining transcript in Hindsight bank '{bank}'...");
+    retain_in_hindsight(&config, hindsight_url, bank, transcript).await?;
     println!("Retained in Hindsight.");
 
     Ok(())
@@ -171,53 +220,86 @@ async fn stop_recording(config: &Config) -> Result<()> {
 
 impl Config {
     fn load(args: CliArgs) -> Result<Self> {
-        let file_config = read_file_config(args.config.as_ref())?;
+        let config_path = args.config.clone().unwrap_or(default_config_path()?);
+        let file_config = read_file_config(&config_path)?;
+        let profile = first_some([
+            args.profile,
+            env::var("MNEMO_PROFILE").ok(),
+            Some(DEFAULT_PROFILE.to_string()),
+        ])
+        .expect("default profile is set");
+        let profile_config = file_config
+            .profiles
+            .get(&profile)
+            .cloned()
+            .unwrap_or_default();
 
         let hindsight_url = first_some([
             args.hindsight_url,
             env::var("MNEMO_HINDSIGHT_API_URL").ok(),
-            file_config.hindsight_url,
+            profile_config.hindsight_url,
         ]);
         let bank = first_some([
             args.bank,
             env::var("MNEMO_BANK_ID").ok(),
-            file_config.bank,
-            Some(DEFAULT_BANK_ID.to_string()),
-        ])
-        .expect("default bank is set");
+            profile_config.bank,
+        ]);
         let language = first_some([
             args.language,
             env::var("MNEMO_ELEVENLABS_LANGUAGE").ok(),
-            file_config.language,
+            profile_config.language,
             Some("eng".to_string()),
         ])
         .expect("default language is set");
         let model = first_some([
             args.model,
             env::var("MNEMO_ELEVENLABS_MODEL").ok(),
-            file_config.model,
+            profile_config.model,
             Some("scribe_v2".to_string()),
         ])
         .expect("default model is set");
         let elevenlabs_api_key = first_some([
             args.elevenlabs_api_key,
             env::var("MNEMO_ELEVENLABS_API_KEY").ok(),
-            file_config.elevenlabs_api_key,
+            profile_config.elevenlabs_api_key,
         ]);
         let hindsight_api_key = first_some([
             args.hindsight_api_key,
             env::var("MNEMO_HINDSIGHT_API_KEY").ok(),
-            file_config.hindsight_api_key,
+            profile_config.hindsight_api_key,
         ]);
         let socket_path = first_some_path([
             args.socket_path,
             env::var_os("MNEMO_SOCKET_PATH").map(PathBuf::from),
-            file_config.socket_path,
+            profile_config.socket_path,
             Some(default_socket_path()?),
         ])
         .expect("default socket path is set");
+        let context = first_some([
+            args.context,
+            env::var("MNEMO_CONTEXT").ok(),
+            profile_config.context,
+            Some(DEFAULT_CONTEXT.to_string()),
+        ])
+        .expect("default context is set");
+        let metadata = first_some_metadata([
+            parse_metadata_entries(args.metadata)?,
+            parse_metadata_env()?,
+            profile_config.metadata,
+        ]);
+        let tags = first_some_vec([
+            non_empty_vec(args.tags),
+            parse_tags_env(),
+            profile_config.tags,
+        ]);
+        let strategy = first_some([
+            args.strategy,
+            env::var("MNEMO_STRATEGY").ok(),
+            profile_config.strategy,
+        ]);
 
         Ok(Self {
+            profile,
             hindsight_url,
             bank,
             language,
@@ -225,9 +307,70 @@ impl Config {
             elevenlabs_api_key,
             hindsight_api_key,
             socket_path,
+            context,
+            metadata,
+            tags,
+            strategy,
         })
     }
 }
+
+fn init_config(config_path: Option<&PathBuf>, force: bool) -> Result<()> {
+    let config_path = match config_path {
+        Some(path) => path.clone(),
+        None => default_config_path()?,
+    };
+
+    if config_path.exists() && !force {
+        bail!(
+            "config file already exists at {}. Use --force to overwrite it",
+            config_path.display()
+        );
+    }
+
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    fs::write(&config_path, DEFAULT_CONFIG)
+        .with_context(|| format!("failed to write config file {}", config_path.display()))?;
+    println!("Created config file at {}", config_path.display());
+    Ok(())
+}
+
+const DEFAULT_CONFIG: &str = r#"# mnemo config
+# Default location: ~/.config/mnemo/config.toml
+# Environment variables override these values. Explicit CLI flags override both.
+
+[profiles.default]
+# Required: your Hindsight API URL.
+# hindsight_url = "https://your-hindsight-api.example.com"
+
+# Required: Hindsight memory bank to retain voice notes into.
+bank = "personal"
+
+# ElevenLabs STT settings.
+language = "eng"
+model = "scribe_v2"
+
+# Default context sent to Hindsight with each retained voice note.
+context = "user recorded voice memo"
+
+# Optional Hindsight retain settings. Leave unset to send null.
+# metadata = { source = "mnemo" }
+# tags = ["voice-note"]
+# strategy = "append"
+
+# Prefer MNEMO_ELEVENLABS_API_KEY for secrets, but config is supported.
+# elevenlabs_api_key = "..."
+
+# Optional. Prefer MNEMO_HINDSIGHT_API_KEY for secrets, but config is supported.
+# hindsight_api_key = "..."
+
+# Defaults to ~/.local/state/mnemo/mnemo.sock
+# socket_path = "/Users/you/.local/state/mnemo/mnemo.sock"
+"#;
 
 fn first_some<const N: usize>(values: [Option<String>; N]) -> Option<String> {
     values.into_iter().flatten().find(|value| !value.is_empty())
@@ -240,12 +383,58 @@ fn first_some_path<const N: usize>(values: [Option<PathBuf>; N]) -> Option<PathB
         .find(|value| !value.as_os_str().is_empty())
 }
 
-fn read_file_config(config_path: Option<&PathBuf>) -> Result<FileConfig> {
-    let path = match config_path {
-        Some(path) => path.clone(),
-        None => default_config_path()?,
-    };
+fn first_some_metadata<const N: usize>(
+    values: [Option<BTreeMap<String, String>>; N],
+) -> Option<BTreeMap<String, String>> {
+    values.into_iter().flatten().find(|value| !value.is_empty())
+}
 
+fn first_some_vec<const N: usize>(values: [Option<Vec<String>>; N]) -> Option<Vec<String>> {
+    values.into_iter().flatten().find(|value| !value.is_empty())
+}
+
+fn non_empty_vec(values: Vec<String>) -> Option<Vec<String>> {
+    let values: Vec<String> = values
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect();
+    (!values.is_empty()).then_some(values)
+}
+
+fn parse_tags_env() -> Option<Vec<String>> {
+    env::var("MNEMO_TAGS")
+        .ok()
+        .and_then(|tags| non_empty_vec(tags.split(',').map(|tag| tag.trim().to_string()).collect()))
+}
+
+fn parse_metadata_env() -> Result<Option<BTreeMap<String, String>>> {
+    let Some(metadata) = env::var("MNEMO_METADATA").ok() else {
+        return Ok(None);
+    };
+    let metadata =
+        serde_json::from_str(&metadata).context("failed to parse MNEMO_METADATA JSON")?;
+    Ok(Some(metadata))
+}
+
+fn parse_metadata_entries(entries: Vec<String>) -> Result<Option<BTreeMap<String, String>>> {
+    if entries.is_empty() {
+        return Ok(None);
+    }
+
+    let mut metadata = BTreeMap::new();
+    for entry in entries {
+        let Some((key, value)) = entry.split_once('=') else {
+            bail!("metadata entries must use KEY=VALUE format: {entry}");
+        };
+        if key.is_empty() {
+            bail!("metadata keys cannot be empty");
+        }
+        metadata.insert(key.to_string(), value.to_string());
+    }
+    Ok(Some(metadata))
+}
+
+fn read_file_config(path: &PathBuf) -> Result<FileConfig> {
     if !path.exists() {
         return Ok(FileConfig::default());
     }
@@ -493,14 +682,25 @@ async fn transcribe(config: &Config, elevenlabs_api_key: &str, wav: Vec<u8>) -> 
     Ok(transcription.text)
 }
 
-async fn retain_in_hindsight(config: &Config, hindsight_url: &str, transcript: &str) -> Result<()> {
+async fn retain_in_hindsight(
+    config: &Config,
+    hindsight_url: &str,
+    bank: &str,
+    transcript: &str,
+) -> Result<()> {
     let url = format!(
         "{}/v1/default/banks/{}/memories",
         hindsight_url.trim_end_matches('/'),
-        config.bank
+        bank
     );
     let body = json!({
-        "items": [{ "content": transcript }],
+        "items": [{
+            "content": transcript,
+            "context": config.context,
+            "metadata": config.metadata,
+            "tags": config.tags,
+            "strategy": config.strategy,
+        }],
         "async": false
     });
 

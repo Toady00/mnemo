@@ -1,13 +1,36 @@
 # Default location: ~/.config/mnemo/config.toml
 # Environment variables override these values. Explicit CLI flags override both.
 
+[profiles.default]
+# Required: your Hindsight API URL.
 hindsight_url = "https://your-hindsight-api.example.com"
+
+# Required: Hindsight memory bank to retain voice notes into.
 bank = "personal"
+
+# ElevenLabs STT settings.
 language = "eng"
 model = "scribe_v2"
+
+# Default context sent to Hindsight with each retained voice note.
+context = "user recorded voice memo"
+
+# Optional Hindsight retain settings. Leave unset to send null.
+# metadata = { source = "mnemo" }
+# tags = ["voice-note"]
+# strategy = "append"
+
+# Prefer MNEMO_ELEVENLABS_API_KEY for secrets, but config is supported.
+# elevenlabs_api_key = "..."
+
+# Optional. Prefer MNEMO_HINDSIGHT_API_KEY for secrets, but config is supported.
+# hindsight_api_key = "..."
+
 # Defaults to ~/.local/state/mnemo/mnemo.sock
 # socket_path = "/Users/you/.local/state/mnemo/mnemo.sock"
 
-# Prefer setting API keys via MNEMO_* environment variables, but config file keys are supported.
-# elevenlabs_api_key = "..."
-# hindsight_api_key = "..."
+[profiles.business]
+hindsight_url = "https://your-hindsight-api.example.com"
+bank = "business"
+context = "user recorded business voice memo"
+tags = ["business", "voice-note"]
