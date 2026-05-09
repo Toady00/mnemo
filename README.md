@@ -20,6 +20,27 @@ Supported target:
 
 Other platforms may work from source, but are not currently tested or packaged.
 
+## Usage
+
+Start recording a voice note:
+
+```bash
+mnemo record
+```
+
+Press `Enter` in that terminal when you are done. `mnemo` will stop recording,
+transcribe the audio, and retain the transcript in Hindsight.
+
+You can also stop an active recording from another process:
+
+```bash
+mnemo stop
+```
+
+This is useful for external triggers like a Stream Deck button. Start the first
+process with `mnemo record`, then have the button run `mnemo stop` to signal the
+recording process to finish.
+
 ## Installation
 
 Install with Homebrew:
