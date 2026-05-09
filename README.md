@@ -5,10 +5,12 @@ ElevenLabs, and stores the resulting text in Hindsight.
 
 ## Requirements
 
-- Rust and Cargo
 - A working macOS microphone input
 - An ElevenLabs API key with Speech-to-Text access
 - A running Hindsight API endpoint
+
+Rust and Cargo are only required if you build from source or install the latest
+development build with `brew install --HEAD mnemo`.
 
 ## Platform Support
 
