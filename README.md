@@ -33,14 +33,17 @@ mnemo record
 Press `Enter` in that terminal when you are done. `mnemo` will stop recording,
 transcribe the audio, and retain the transcript in Hindsight.
 
-You can also stop an active recording from another process:
+### Stream Decks And External Triggers
+
+As an alternative to pressing `Enter`, you can stop an active recording from
+another process:
 
 ```bash
 mnemo stop
 ```
 
-This is useful for external triggers like a Stream Deck button. Start the first
-process with `mnemo record`, then have the button run `mnemo stop` to signal the
+This is useful for external triggers like a Stream Deck button. Start recording
+with `mnemo record`, then have the button run `mnemo stop` to signal that
 recording process to finish.
 
 ## Installation
