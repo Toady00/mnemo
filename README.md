@@ -107,7 +107,7 @@ context = "user recorded voice memo"
 # Defaults to ~/.local/state/mnemo/mnemo.sock
 # socket_path = "/Users/you/.local/state/mnemo/mnemo.sock"
 
-# Prefer environment variables for secrets, but config keys are supported.
+# Prefer macOS Keychain or environment variables for secrets, but config keys are supported.
 # elevenlabs_api_key = "..."
 # hindsight_api_key = "..."
 ```
@@ -121,10 +121,66 @@ built-in defaults < config.toml < environment variables < CLI flags
 `hindsight_url` is required for `mnemo record`. Set it in the config file,
 `MNEMO_HINDSIGHT_API_URL`, or `--hindsight-url`.
 
-`bank` and the ElevenLabs API key are also required for `mnemo record`. Set
-`bank` in the selected profile, `MNEMO_BANK_ID`, or `--bank`. Set the
-ElevenLabs API key with `MNEMO_ELEVENLABS_API_KEY`, `elevenlabs_api_key` in the
-selected profile, or `--elevenlabs-api-key`.
+`bank` and an API key are also required for `mnemo record`. Set `bank` in the
+selected profile, `MNEMO_BANK_ID`, or `--bank`.
+
+API key precedence is:
+
+```text
+--elevenlabs-api-key > MNEMO_ELEVENLABS_API_KEY > macOS Keychain > config.toml
+```
+
+In practice, prefer macOS Keychain for normal use and
+`MNEMO_ELEVENLABS_API_KEY` for one-time setup or development overrides.
+
+## macOS Keychain
+
+`mnemo` can store the active API key in macOS Keychain so GUI wrappers and
+plugin-launched processes do not need shell environment variables.
+
+First-time setup:
+
+```bash
+export MNEMO_ELEVENLABS_API_KEY="your-elevenlabs-key"
+mnemo keychain sync
+unset MNEMO_ELEVENLABS_API_KEY
+```
+
+For a named profile:
+
+```bash
+export MNEMO_ELEVENLABS_API_KEY="your-business-elevenlabs-key"
+mnemo keychain sync --profile business
+unset MNEMO_ELEVENLABS_API_KEY
+```
+
+List profiles with API keys stored in Keychain:
+
+```bash
+mnemo keychain list
+```
+
+Remove selected Keychain entries interactively:
+
+```bash
+mnemo keychain remove
+```
+
+Remove all mnemo API keys with confirmation:
+
+```bash
+mnemo keychain remove --all
+```
+
+Remove all mnemo API keys without confirmation:
+
+```bash
+mnemo keychain remove --all --force
+```
+
+Keychain entries use service `mnemo-secrets` and account names scoped by
+profile. Keychain operations shell out to `/usr/bin/security` so access is tied
+to Apple's stable system tool rather than mnemo's binary signature.
 
 ## Profiles
 

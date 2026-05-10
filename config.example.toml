@@ -20,7 +20,7 @@ context = "user recorded voice memo"
 # tags = ["voice-note"]
 # strategy = "append"
 
-# Prefer MNEMO_ELEVENLABS_API_KEY for secrets, but config is supported.
+# Prefer macOS Keychain or MNEMO_ELEVENLABS_API_KEY for secrets, but config is supported.
 # elevenlabs_api_key = "..."
 
 # Optional. Prefer MNEMO_HINDSIGHT_API_KEY for secrets, but config is supported.
