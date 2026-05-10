@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added newline-delimited JSON status updates over the recording Unix socket.
+- Added socket status states for `recording`, `processing`, `complete`, and
+  `error`.
+
+### Changed
+
+- Changed `mnemo stop` to use the JSON socket protocol instead of the previous
+  plain-text `stop` command.
+
 ## [0.2.0] - 2026-05-09
 
 ### Added

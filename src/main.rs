@@ -15,10 +15,13 @@ use clap::{Parser, Subcommand};
 use cpal::Sample;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use reqwest::multipart;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::watch;
 
 const DEFAULT_CONTEXT: &str = "user recorded voice memo";
 const DEFAULT_PROFILE: &str = "default";
@@ -157,6 +160,45 @@ struct ElevenLabsTranscription {
     text: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum RecordingState {
+    Recording,
+    Processing,
+    Complete,
+    Error,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct RecordingStatus {
+    state: RecordingState,
+    #[serde(rename = "startedAt")]
+    started_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Serialize)]
+struct StatusMessage {
+    #[serde(rename = "type")]
+    message_type: &'static str,
+    #[serde(flatten)]
+    status: RecordingStatus,
+}
+
+#[derive(Serialize)]
+struct ErrorMessage {
+    #[serde(rename = "type")]
+    message_type: &'static str,
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SocketCommand {
+    #[serde(rename = "type")]
+    command_type: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = CliArgs::parse();
@@ -176,13 +218,13 @@ async fn main() -> Result<()> {
 
 async fn record(config: Config) -> Result<()> {
     let elevenlabs_api_key = resolve_api_key(&config)?.ok_or_else(missing_api_key_error)?;
-    let hindsight_url = config.hindsight_url.as_deref().ok_or_else(|| {
+    let hindsight_url = config.hindsight_url.clone().ok_or_else(|| {
         anyhow!(
             "MNEMO_HINDSIGHT_API_URL must be set in the environment, profile '{}' in the config file, or --hindsight-url",
             config.profile
         )
     })?;
-    let bank = config.bank.as_deref().ok_or_else(|| {
+    let bank = config.bank.clone().ok_or_else(|| {
         anyhow!(
             "MNEMO_BANK_ID must be set in the environment, profile '{}' in the config file, or --bank",
             config.profile
@@ -190,14 +232,53 @@ async fn record(config: Config) -> Result<()> {
     })?;
     ensure_singleton_socket(&config.socket_path)?;
     let (_socket_guard, listener) = bind_control_socket(config.socket_path.clone()).await?;
+    let started_at = now_rfc3339();
+    let (status_tx, status_rx) = watch::channel(RecordingStatus {
+        state: RecordingState::Recording,
+        started_at,
+        message: None,
+    });
     let (stop_tx, stop_rx) = mpsc::channel();
-    let socket_task = tokio::spawn(control_socket_server(listener, stop_tx.clone()));
+    let socket_task = tokio::spawn(control_socket_server(listener, stop_tx.clone(), status_rx));
     spawn_enter_stop_thread(stop_tx);
+
+    let result = record_and_retain(
+        config,
+        elevenlabs_api_key,
+        hindsight_url,
+        bank,
+        stop_rx,
+        status_tx.clone(),
+    )
+    .await;
+
+    if let Err(error) = &result {
+        send_recording_status(&status_tx, RecordingState::Error, Some(error.to_string()));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    socket_task.abort();
+    result
+}
+
+async fn record_and_retain(
+    config: Config,
+    elevenlabs_api_key: String,
+    hindsight_url: String,
+    bank: String,
+    stop_rx: mpsc::Receiver<()>,
+    status_tx: watch::Sender<RecordingStatus>,
+) -> Result<()> {
+    let started_at = status_tx.borrow().started_at.clone();
 
     let recording = tokio::task::spawn_blocking(move || record_until_stop(stop_rx))
         .await
         .context("recording task failed")??;
-    socket_task.abort();
+    status_tx.send_replace(RecordingStatus {
+        state: RecordingState::Processing,
+        started_at: started_at.clone(),
+        message: None,
+    });
     println!("Recording complete. Sending to ElevenLabs...");
 
     let wav = wav_bytes(
@@ -210,13 +291,25 @@ async fn record(config: Config) -> Result<()> {
 
     if transcript.is_empty() {
         println!("No speech detected. Nothing retained in Hindsight.");
+        status_tx.send_replace(RecordingStatus {
+            state: RecordingState::Complete,
+            started_at,
+            message: Some("No speech detected".to_string()),
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
         return Ok(());
     }
 
     println!("\nTranscription: {transcript}");
     println!("Retaining transcript in Hindsight bank '{bank}'...");
-    retain_in_hindsight(&config, hindsight_url, bank, transcript).await?;
+    retain_in_hindsight(&config, &hindsight_url, &bank, transcript).await?;
     println!("Retained in Hindsight.");
+    status_tx.send_replace(RecordingStatus {
+        state: RecordingState::Complete,
+        started_at,
+        message: None,
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     Ok(())
 }
@@ -231,7 +324,7 @@ async fn stop_recording(config: &Config) -> Result<()> {
             )
         })?;
     stream
-        .write_all(b"stop\n")
+        .write_all(b"{\"type\":\"stop\"}\n")
         .await
         .context("failed to send stop command")?;
     stream.shutdown().await.ok();
@@ -912,33 +1005,167 @@ fn ensure_singleton_socket(path: &PathBuf) -> Result<()> {
     }
 }
 
-async fn control_socket_server(listener: UnixListener, stop_tx: mpsc::Sender<()>) {
+async fn control_socket_server(
+    listener: UnixListener,
+    stop_tx: mpsc::Sender<()>,
+    status_rx: watch::Receiver<RecordingStatus>,
+) {
     loop {
-        let Ok((mut stream, _)) = listener.accept().await else {
+        let Ok((stream, _)) = listener.accept().await else {
             continue;
         };
-        let mut command = String::new();
-        if stream.read_to_string(&mut command).await.is_err() {
-            let _ = stream.write_all(b"error reading command\n").await;
-            continue;
-        }
+        tokio::spawn(handle_control_client(
+            stream,
+            stop_tx.clone(),
+            status_rx.clone(),
+        ));
+    }
+}
 
-        match command.trim() {
-            "stop" => {
-                let _ = stop_tx.send(());
-                let _ = stream.write_all(b"ok stopping\n").await;
+async fn handle_control_client(
+    stream: UnixStream,
+    stop_tx: mpsc::Sender<()>,
+    mut status_rx: watch::Receiver<RecordingStatus>,
+) {
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let status = status_rx.borrow().clone();
+    if write_status_message(&mut writer, status).await.is_err() {
+        return;
+    }
+
+    let mut read_closed = false;
+    loop {
+        let mut line = String::new();
+        tokio::select! {
+            status_changed = status_rx.changed() => {
+                if status_changed.is_err() {
+                    return;
+                }
+                let status = status_rx.borrow().clone();
+                if write_status_message(&mut writer, status).await.is_err() {
+                    return;
+                }
             }
-            _ => {
-                let _ = stream.write_all(b"unknown command\n").await;
+            read_result = reader.read_line(&mut line), if !read_closed => {
+                let Ok(bytes_read) = read_result else {
+                    let _ = write_error_message(&mut writer, "failed to read command").await;
+                    read_closed = true;
+                    continue;
+                };
+                if bytes_read == 0 {
+                    read_closed = true;
+                    continue;
+                }
+                if handle_socket_command(line.trim(), &stop_tx, &status_rx, &mut writer).await.is_err() {
+                    return;
+                }
             }
         }
     }
 }
 
+async fn handle_socket_command<W>(
+    line: &str,
+    stop_tx: &mpsc::Sender<()>,
+    status_rx: &watch::Receiver<RecordingStatus>,
+    writer: &mut W,
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    let command: SocketCommand = match serde_json::from_str(line) {
+        Ok(command) => command,
+        Err(error) => {
+            write_error_message(writer, &format!("invalid JSON command: {error}")).await?;
+            return Ok(());
+        }
+    };
+
+    match command.command_type.as_str() {
+        "stop" => {
+            let state = status_rx.borrow().state.clone();
+            if matches!(state, RecordingState::Recording) {
+                let _ = stop_tx.send(());
+            } else {
+                write_error_message(writer, "cannot stop unless recording").await?;
+            }
+        }
+        "status" => {
+            let status = status_rx.borrow().clone();
+            write_status_message(writer, status).await?;
+        }
+        command => {
+            write_error_message(writer, &format!("unknown command type: {command}")).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn write_status_message<W>(writer: &mut W, status: RecordingStatus) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    write_json_line(
+        writer,
+        &StatusMessage {
+            message_type: "status",
+            status,
+        },
+    )
+    .await
+}
+
+async fn write_error_message<W>(writer: &mut W, message: &str) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    write_json_line(
+        writer,
+        &ErrorMessage {
+            message_type: "error",
+            message: message.to_string(),
+        },
+    )
+    .await
+}
+
+async fn write_json_line<W, T>(writer: &mut W, value: &T) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+    T: Serialize,
+{
+    let mut line = serde_json::to_vec(value).context("failed to serialize socket message")?;
+    line.push(b'\n');
+    writer
+        .write_all(&line)
+        .await
+        .context("failed to write socket message")
+}
+
+fn send_recording_status(
+    status_tx: &watch::Sender<RecordingStatus>,
+    state: RecordingState,
+    message: Option<String>,
+) {
+    let started_at = status_tx.borrow().started_at.clone();
+    status_tx.send_replace(RecordingStatus {
+        state,
+        started_at,
+        message,
+    });
+}
+
+fn now_rfc3339() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
 fn spawn_enter_stop_thread(stop_tx: mpsc::Sender<()>) {
     thread::spawn(move || {
         let mut line = String::new();
-        if io::stdin().read_line(&mut line).is_ok() {
+        if matches!(io::stdin().read_line(&mut line), Ok(bytes_read) if bytes_read > 0) {
             let _ = stop_tx.send(());
         }
     });

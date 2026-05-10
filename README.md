@@ -343,6 +343,30 @@ live process, a second `record` command exits instead of trying to record from
 the microphone at the same time. If the socket is stale, `mnemo` removes it and
 continues.
 
+The socket stays open for the full `mnemo record` lifecycle and uses
+newline-delimited JSON. New clients receive the current status immediately after
+connecting, and connected clients receive future status changes.
+
+Status messages look like:
+
+```json
+{"type":"status","state":"recording","startedAt":"2026-05-09T19:24:18.248Z"}
+{"type":"status","state":"processing","startedAt":"2026-05-09T19:24:18.248Z"}
+{"type":"status","state":"complete","startedAt":"2026-05-09T19:24:18.248Z"}
+{"type":"status","state":"error","startedAt":"2026-05-09T19:24:18.248Z","message":"failed to call ElevenLabs STT"}
+```
+
+Clients can request the current status or stop an active recording:
+
+```json
+{"type":"status"}
+{"type":"stop"}
+```
+
+No socket means `mnemo` is idle. `recording` means `stop` is valid.
+`processing`, `complete`, and `error` are terminal or near-terminal states where
+the socket will close shortly after the final status is published.
+
 ## Release Process
 
 `mnemo` releases are currently built locally for macOS Apple Silicon and
