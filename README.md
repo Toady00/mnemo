@@ -374,17 +374,17 @@ shasum -a 256 dist/mnemo-aarch64-apple-darwin.tar.gz
 Create and push a signed release tag:
 
 ```bash
-git tag -s v0.1.0 -m "Release v0.1.0"
-git push origin v0.1.0
+git tag -s vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
 ```
 
 Create the GitHub release:
 
 ```bash
-gh release create v0.1.0 \
+gh release create vX.Y.Z \
   dist/mnemo-aarch64-apple-darwin.tar.gz \
-  --title "mnemo v0.1.0" \
-  --notes "Initial macOS Apple Silicon release."
+  --title "mnemo vX.Y.Z" \
+  --notes-file CHANGELOG.md
 ```
 
 After the release asset is published, update the Homebrew formula in

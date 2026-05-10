@@ -1,6 +1,6 @@
 [package]
 name = "mnemo"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Record voice notes, transcribe them with ElevenLabs, and store them in Hindsight"
 license = "MIT"
