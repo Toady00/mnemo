@@ -23,7 +23,6 @@ use tokio::net::{UnixListener, UnixStream};
 const DEFAULT_CONTEXT: &str = "user recorded voice memo";
 const DEFAULT_PROFILE: &str = "default";
 const KEYCHAIN_SERVICE: &str = "mnemo-secrets";
-const KEYCHAIN_ACCOUNT_SUFFIX: &str = "api-key";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -95,9 +94,9 @@ enum Command {
 
 #[derive(Clone, Debug, Subcommand)]
 enum KeychainCommand {
-    /// Store the active API key in macOS Keychain.
+    /// Store configured API keys in macOS Keychain.
     Sync,
-    /// List profiles with API keys in macOS Keychain.
+    /// List API keys stored in macOS Keychain.
     List,
     /// Remove API keys from macOS Keychain.
     Remove {
@@ -143,6 +142,8 @@ struct Config {
     cli_elevenlabs_api_key: Option<String>,
     env_elevenlabs_api_key: Option<String>,
     elevenlabs_api_key: Option<String>,
+    cli_hindsight_api_key: Option<String>,
+    env_hindsight_api_key: Option<String>,
     hindsight_api_key: Option<String>,
     socket_path: PathBuf,
     context: String,
@@ -287,11 +288,9 @@ impl Config {
         let cli_elevenlabs_api_key = args.elevenlabs_api_key;
         let env_elevenlabs_api_key = env::var("MNEMO_ELEVENLABS_API_KEY").ok();
         let elevenlabs_api_key = profile_config.elevenlabs_api_key;
-        let hindsight_api_key = first_some([
-            args.hindsight_api_key,
-            env::var("MNEMO_HINDSIGHT_API_KEY").ok(),
-            profile_config.hindsight_api_key,
-        ]);
+        let cli_hindsight_api_key = args.hindsight_api_key;
+        let env_hindsight_api_key = env::var("MNEMO_HINDSIGHT_API_KEY").ok();
+        let hindsight_api_key = profile_config.hindsight_api_key;
         let socket_path = first_some_path([
             args.socket_path,
             env::var_os("MNEMO_SOCKET_PATH").map(PathBuf::from),
@@ -331,6 +330,8 @@ impl Config {
             cli_elevenlabs_api_key,
             env_elevenlabs_api_key,
             elevenlabs_api_key,
+            cli_hindsight_api_key,
+            env_hindsight_api_key,
             hindsight_api_key,
             socket_path,
             context,
@@ -374,41 +375,56 @@ fn handle_keychain_command(config: &Config, command: &KeychainCommand) -> Result
 }
 
 fn keychain_sync_command(config: &Config) -> Result<()> {
-    let api_key = first_some([
+    let elevenlabs_api_key = first_some([
         config.cli_elevenlabs_api_key.clone(),
         config.env_elevenlabs_api_key.clone(),
         config.elevenlabs_api_key.clone(),
-    ])
-    .ok_or_else(|| {
-        anyhow!(
-            "no API key found to sync. Set MNEMO_ELEVENLABS_API_KEY in your shell first, then re-run"
-        )
-    })?;
+    ]);
+    let hindsight_api_key = first_some([
+        config.cli_hindsight_api_key.clone(),
+        config.env_hindsight_api_key.clone(),
+        config.hindsight_api_key.clone(),
+    ]);
 
-    keychain_write(&config.profile, &api_key)?;
-    println!(
-        "Stored API key for profile '{}' in macOS Keychain.",
-        config.profile
-    );
+    if elevenlabs_api_key.is_none() && hindsight_api_key.is_none() {
+        bail!(
+            "no API keys found to sync. Set MNEMO_ELEVENLABS_API_KEY or MNEMO_HINDSIGHT_API_KEY in your shell first, then re-run"
+        );
+    }
+
+    if let Some(api_key) = elevenlabs_api_key {
+        keychain_write(&config.profile, SecretKind::ElevenLabs, &api_key)?;
+        println!(
+            "Stored ElevenLabs API key for profile '{}' in macOS Keychain.",
+            config.profile
+        );
+    }
+    if let Some(api_key) = hindsight_api_key {
+        keychain_write(&config.profile, SecretKind::Hindsight, &api_key)?;
+        println!(
+            "Stored Hindsight API key for profile '{}' in macOS Keychain.",
+            config.profile
+        );
+    }
     Ok(())
 }
 
 fn keychain_list_command() -> Result<()> {
-    let profiles = keychain_list_profiles()?;
-    if profiles.is_empty() {
+    let entries = keychain_list_entries()?;
+    if entries.is_empty() {
         println!("No mnemo API keys found in macOS Keychain.");
         return Ok(());
     }
 
-    for profile in profiles {
-        println!("{profile}");
+    for entry in entries {
+        println!("{} {}", entry.profile, entry.kind.name());
     }
     Ok(())
 }
 
 fn keychain_remove_command(config: &Config, all: bool, force: bool) -> Result<()> {
-    let profiles = keychain_list_profiles()?;
-    if profiles.is_empty() {
+    let entries = keychain_list_entries()?;
+    if entries.is_empty() {
         println!("No mnemo API keys found in macOS Keychain.");
         return Ok(());
     }
@@ -419,27 +435,38 @@ fn keychain_remove_command(config: &Config, all: bool, force: bool) -> Result<()
             return Ok(());
         }
 
-        for profile in profiles {
-            keychain_remove(&profile)?;
-            println!("Removed API key for profile '{profile}'.");
+        for entry in entries {
+            keychain_remove(&entry.profile, entry.kind)?;
+            println!(
+                "Removed {} API key for profile '{}'.",
+                entry.kind.display_name(),
+                entry.profile
+            );
         }
         return Ok(());
     }
 
-    let selected_profiles = if force {
-        vec![config.profile.clone()]
+    let selected_entries = if force {
+        entries
+            .into_iter()
+            .filter(|entry| entry.profile == config.profile)
+            .collect()
     } else {
-        prompt_for_profiles(&profiles)?
+        prompt_for_keychain_entries(&entries)?
     };
 
-    if selected_profiles.is_empty() {
+    if selected_entries.is_empty() {
         println!("Cancelled.");
         return Ok(());
     }
 
-    for profile in selected_profiles {
-        keychain_remove(&profile)?;
-        println!("Removed API key for profile '{profile}'.");
+    for entry in selected_entries {
+        keychain_remove(&entry.profile, entry.kind)?;
+        println!(
+            "Removed {} API key for profile '{}'.",
+            entry.kind.display_name(),
+            entry.profile
+        );
     }
     Ok(())
 }
@@ -452,11 +479,26 @@ fn resolve_api_key(config: &Config) -> Result<Option<String>> {
         return Ok(Some(api_key));
     }
 
-    if let Some(api_key) = keychain_read(&config.profile)? {
+    if let Some(api_key) = keychain_read(&config.profile, SecretKind::ElevenLabs)? {
         return Ok(Some(api_key));
     }
 
     Ok(config.elevenlabs_api_key.clone())
+}
+
+fn resolve_hindsight_api_key(config: &Config) -> Result<Option<String>> {
+    if let Some(api_key) = first_some([
+        config.cli_hindsight_api_key.clone(),
+        config.env_hindsight_api_key.clone(),
+    ]) {
+        return Ok(Some(api_key));
+    }
+
+    if let Some(api_key) = keychain_read(&config.profile, SecretKind::Hindsight)? {
+        return Ok(Some(api_key));
+    }
+
+    Ok(config.hindsight_api_key.clone())
 }
 
 fn missing_api_key_error() -> anyhow::Error {
@@ -465,18 +507,57 @@ fn missing_api_key_error() -> anyhow::Error {
     )
 }
 
-fn keychain_account(profile: &str) -> String {
-    format!("profile:{profile}:{KEYCHAIN_ACCOUNT_SUFFIX}")
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SecretKind {
+    ElevenLabs,
+    Hindsight,
 }
 
-fn profile_from_keychain_account(account: &str) -> Option<String> {
-    account
-        .strip_prefix("profile:")?
-        .strip_suffix(&format!(":{KEYCHAIN_ACCOUNT_SUFFIX}"))
-        .map(ToString::to_string)
+impl SecretKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::ElevenLabs => "elevenlabs",
+            Self::Hindsight => "hindsight",
+        }
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::ElevenLabs => "ElevenLabs",
+            Self::Hindsight => "Hindsight",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "elevenlabs" => Some(Self::ElevenLabs),
+            "hindsight" => Some(Self::Hindsight),
+            _ => None,
+        }
+    }
 }
 
-fn keychain_write(profile: &str, api_key: &str) -> Result<()> {
+#[derive(Clone, Debug)]
+struct KeychainEntry {
+    profile: String,
+    kind: SecretKind,
+}
+
+fn keychain_account(profile: &str, kind: SecretKind) -> String {
+    format!("profile:{profile}:{}-api-key", kind.name())
+}
+
+fn entry_from_keychain_account(account: &str) -> Option<KeychainEntry> {
+    let account = account.strip_prefix("profile:")?;
+    let (profile, kind) = account.rsplit_once(':')?;
+    let kind = kind.strip_suffix("-api-key")?;
+    Some(KeychainEntry {
+        profile: profile.to_string(),
+        kind: SecretKind::from_name(kind)?,
+    })
+}
+
+fn keychain_write(profile: &str, kind: SecretKind, api_key: &str) -> Result<()> {
     // `security -w <secret>` briefly exposes the secret in process arguments.
     // This is limited to an explicit one-shot sync command and avoids binding
     // Keychain ACLs to mnemo's changing binary signature.
@@ -487,7 +568,7 @@ fn keychain_write(profile: &str, api_key: &str) -> Result<()> {
             "-s",
             KEYCHAIN_SERVICE,
             "-a",
-            &keychain_account(profile),
+            &keychain_account(profile, kind),
             "-w",
             api_key,
         ])
@@ -503,14 +584,14 @@ fn keychain_write(profile: &str, api_key: &str) -> Result<()> {
     Ok(())
 }
 
-fn keychain_read(profile: &str) -> Result<Option<String>> {
+fn keychain_read(profile: &str, kind: SecretKind) -> Result<Option<String>> {
     let output = ProcessCommand::new("/usr/bin/security")
         .args([
             "find-generic-password",
             "-s",
             KEYCHAIN_SERVICE,
             "-a",
-            &keychain_account(profile),
+            &keychain_account(profile, kind),
             "-w",
         ])
         .output()
@@ -524,14 +605,14 @@ fn keychain_read(profile: &str) -> Result<Option<String>> {
     Ok((!api_key.is_empty()).then_some(api_key))
 }
 
-fn keychain_remove(profile: &str) -> Result<()> {
+fn keychain_remove(profile: &str, kind: SecretKind) -> Result<()> {
     let output = ProcessCommand::new("/usr/bin/security")
         .args([
             "delete-generic-password",
             "-s",
             KEYCHAIN_SERVICE,
             "-a",
-            &keychain_account(profile),
+            &keychain_account(profile, kind),
         ])
         .output()
         .context("failed to run /usr/bin/security")?;
@@ -546,7 +627,7 @@ fn keychain_remove(profile: &str) -> Result<()> {
     Ok(())
 }
 
-fn keychain_list_profiles() -> Result<Vec<String>> {
+fn keychain_list_entries() -> Result<Vec<KeychainEntry>> {
     let output = ProcessCommand::new("/usr/bin/security")
         .args(["dump-keychain"])
         .output()
@@ -556,13 +637,13 @@ fn keychain_list_profiles() -> Result<Vec<String>> {
         bail!("/usr/bin/security failed to list keychain entries");
     }
 
-    let mut profiles = Vec::new();
+    let mut entries = Vec::new();
     let mut current_service: Option<String> = None;
     let mut current_account: Option<String> = None;
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let line = line.trim();
         if line.starts_with("keychain:") || line.starts_with("class:") {
-            push_keychain_profile(&mut profiles, &current_service, &current_account);
+            push_keychain_entry(&mut entries, &current_service, &current_account);
             current_service = None;
             current_account = None;
         }
@@ -573,15 +654,19 @@ fn keychain_list_profiles() -> Result<Vec<String>> {
             current_account = Some(account);
         }
     }
-    push_keychain_profile(&mut profiles, &current_service, &current_account);
+    push_keychain_entry(&mut entries, &current_service, &current_account);
 
-    profiles.sort();
-    profiles.dedup();
-    Ok(profiles)
+    entries.sort_by(|a, b| {
+        a.profile
+            .cmp(&b.profile)
+            .then(a.kind.name().cmp(b.kind.name()))
+    });
+    entries.dedup_by(|a, b| a.profile == b.profile && a.kind == b.kind);
+    Ok(entries)
 }
 
-fn push_keychain_profile(
-    profiles: &mut Vec<String>,
+fn push_keychain_entry(
+    entries: &mut Vec<KeychainEntry>,
     service: &Option<String>,
     account: &Option<String>,
 ) {
@@ -591,8 +676,8 @@ fn push_keychain_profile(
     let Some(account) = account else {
         return;
     };
-    if let Some(profile) = profile_from_keychain_account(account) {
-        profiles.push(profile);
+    if let Some(entry) = entry_from_keychain_account(account) {
+        entries.push(entry);
     }
 }
 
@@ -603,10 +688,10 @@ fn parse_keychain_blob(line: &str, key: &str) -> Option<String> {
     Some(line[start..start + end].to_string())
 }
 
-fn prompt_for_profiles(profiles: &[String]) -> Result<Vec<String>> {
+fn prompt_for_keychain_entries(entries: &[KeychainEntry]) -> Result<Vec<KeychainEntry>> {
     println!("Select mnemo API keys to remove:");
-    for (index, profile) in profiles.iter().enumerate() {
-        println!("  {}. {}", index + 1, profile);
+    for (index, entry) in entries.iter().enumerate() {
+        println!("  {}. {} {}", index + 1, entry.profile, entry.kind.name());
     }
     println!("Enter numbers separated by commas, or 'all'. Leave blank to cancel.");
 
@@ -619,7 +704,7 @@ fn prompt_for_profiles(profiles: &[String]) -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
     if input.eq_ignore_ascii_case("all") {
-        return Ok(profiles.to_vec());
+        return Ok(entries.to_vec());
     }
 
     let mut selected = Vec::new();
@@ -628,13 +713,17 @@ fn prompt_for_profiles(profiles: &[String]) -> Result<Vec<String>> {
             .trim()
             .parse()
             .with_context(|| format!("invalid selection: {part}"))?;
-        let Some(profile) = profiles.get(index.saturating_sub(1)) else {
+        let Some(entry) = entries.get(index.saturating_sub(1)) else {
             bail!("selection out of range: {index}");
         };
-        selected.push(profile.clone());
+        selected.push(entry.clone());
     }
-    selected.sort();
-    selected.dedup();
+    selected.sort_by(|a, b| {
+        a.profile
+            .cmp(&b.profile)
+            .then(a.kind.name().cmp(b.kind.name()))
+    });
+    selected.dedup_by(|a, b| a.profile == b.profile && a.kind == b.kind);
     Ok(selected)
 }
 
@@ -673,7 +762,7 @@ context = "user recorded voice memo"
 # Prefer macOS Keychain or MNEMO_ELEVENLABS_API_KEY for secrets, but config is supported.
 # elevenlabs_api_key = "..."
 
-# Optional. Prefer MNEMO_HINDSIGHT_API_KEY for secrets, but config is supported.
+# Optional. Prefer macOS Keychain or MNEMO_HINDSIGHT_API_KEY for secrets, but config is supported.
 # hindsight_api_key = "..."
 
 # Defaults to ~/.local/state/mnemo/mnemo.sock
@@ -1014,7 +1103,7 @@ async fn retain_in_hindsight(
 
     let client = reqwest::Client::new();
     let mut request = client.post(url).json(&body);
-    if let Some(api_key) = &config.hindsight_api_key {
+    if let Some(api_key) = resolve_hindsight_api_key(config)? {
         request = request.bearer_auth(api_key);
     }
 

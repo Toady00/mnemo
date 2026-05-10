@@ -23,7 +23,7 @@ context = "user recorded voice memo"
 # Prefer macOS Keychain or MNEMO_ELEVENLABS_API_KEY for secrets, but config is supported.
 # elevenlabs_api_key = "..."
 
-# Optional. Prefer MNEMO_HINDSIGHT_API_KEY for secrets, but config is supported.
+# Optional. Prefer macOS Keychain or MNEMO_HINDSIGHT_API_KEY for secrets, but config is supported.
 # hindsight_api_key = "..."
 
 # Defaults to ~/.local/state/mnemo/mnemo.sock

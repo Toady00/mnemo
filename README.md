@@ -121,40 +121,45 @@ built-in defaults < config.toml < environment variables < CLI flags
 `hindsight_url` is required for `mnemo record`. Set it in the config file,
 `MNEMO_HINDSIGHT_API_URL`, or `--hindsight-url`.
 
-`bank` and an API key are also required for `mnemo record`. Set `bank` in the
-selected profile, `MNEMO_BANK_ID`, or `--bank`.
+`bank` and an ElevenLabs API key are also required for `mnemo record`. Set
+`bank` in the selected profile, `MNEMO_BANK_ID`, or `--bank`.
 
-API key precedence is:
+API key precedence for ElevenLabs and Hindsight keys is:
 
 ```text
---elevenlabs-api-key > MNEMO_ELEVENLABS_API_KEY > macOS Keychain > config.toml
+CLI flag > MNEMO_* environment variable > macOS Keychain > config.toml
 ```
 
 In practice, prefer macOS Keychain for normal use and
-`MNEMO_ELEVENLABS_API_KEY` for one-time setup or development overrides.
+`MNEMO_ELEVENLABS_API_KEY` or `MNEMO_HINDSIGHT_API_KEY` for one-time setup or
+development overrides.
 
 ## macOS Keychain
 
-`mnemo` can store the active API key in macOS Keychain so GUI wrappers and
+`mnemo` can store API keys in macOS Keychain so GUI wrappers and
 plugin-launched processes do not need shell environment variables.
 
 First-time setup:
 
 ```bash
 export MNEMO_ELEVENLABS_API_KEY="your-elevenlabs-key"
+export MNEMO_HINDSIGHT_API_KEY="your-hindsight-key"
 mnemo keychain sync
 unset MNEMO_ELEVENLABS_API_KEY
+unset MNEMO_HINDSIGHT_API_KEY
 ```
 
 For a named profile:
 
 ```bash
 export MNEMO_ELEVENLABS_API_KEY="your-business-elevenlabs-key"
+export MNEMO_HINDSIGHT_API_KEY="your-business-hindsight-key"
 mnemo keychain sync --profile business
 unset MNEMO_ELEVENLABS_API_KEY
+unset MNEMO_HINDSIGHT_API_KEY
 ```
 
-List profiles with API keys stored in Keychain:
+List API keys stored in Keychain:
 
 ```bash
 mnemo keychain list
@@ -179,8 +184,17 @@ mnemo keychain remove --all --force
 ```
 
 Keychain entries use service `mnemo-secrets` and account names scoped by
-profile. Keychain operations shell out to `/usr/bin/security` so access is tied
-to Apple's stable system tool rather than mnemo's binary signature.
+profile and key name:
+
+```text
+profile:default:elevenlabs-api-key
+profile:default:hindsight-api-key
+profile:business:elevenlabs-api-key
+profile:business:hindsight-api-key
+```
+
+Keychain operations shell out to `/usr/bin/security` so access is tied to
+Apple's stable system tool rather than mnemo's binary signature.
 
 ## Profiles
 
