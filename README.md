@@ -407,7 +407,20 @@ the socket will close shortly after the final status is published.
 `mnemo` releases are currently built locally for macOS Apple Silicon and
 published through GitHub Releases.
 
-Before releasing, verify the project:
+Feature work is committed first, with its changelog entries under
+`## [Unreleased]`. The release itself is then a separate commit that only bumps
+the version and promotes those entries under a new version heading.
+
+Bump `version` in `Cargo.toml`, then refresh the lockfile:
+
+```bash
+cargo update --workspace
+```
+
+In `CHANGELOG.md`, add a `## [X.Y.Z] - YYYY-MM-DD` heading directly below
+`## [Unreleased]`, leaving the existing entries beneath it.
+
+Verify the project:
 
 ```bash
 cargo fmt --check
@@ -421,7 +434,7 @@ Build the release binary:
 cargo build --release
 ```
 
-Package the release asset:
+Package the release asset and note the checksum:
 
 ```bash
 mkdir -p dist
@@ -430,11 +443,29 @@ tar -czf dist/mnemo-aarch64-apple-darwin.tar.gz -C dist mnemo
 shasum -a 256 dist/mnemo-aarch64-apple-darwin.tar.gz
 ```
 
-Create and push a signed release tag:
+Commit the version bump, then create and push a signed release tag:
 
 ```bash
+git commit -m "Prepare release X.Y.Z" Cargo.toml Cargo.lock CHANGELOG.md
+git push origin master
 git tag -s vX.Y.Z -m "Release vX.Y.Z"
 git push origin vX.Y.Z
+```
+
+Release notes cover only the version being released, so they are written
+separately rather than taken from `CHANGELOG.md` as a whole. Reuse that
+version's changelog entries and close with the asset checksum:
+
+```bash
+cat > /tmp/mnemo-notes.md << EOF
+## Added
+
+- Entries for this version only, copied from CHANGELOG.md.
+
+## Asset Checksum
+
+\`$(shasum -a 256 dist/mnemo-aarch64-apple-darwin.tar.gz | awk '{print $1}')  mnemo-aarch64-apple-darwin.tar.gz\`
+EOF
 ```
 
 Create the GitHub release:
@@ -443,11 +474,17 @@ Create the GitHub release:
 gh release create vX.Y.Z \
   dist/mnemo-aarch64-apple-darwin.tar.gz \
   --title "mnemo vX.Y.Z" \
-  --notes-file CHANGELOG.md
+  --notes-file /tmp/mnemo-notes.md
 ```
 
-After the release asset is published, update the Homebrew formula in
-`Toady00/homebrew-tap` with the new version URL and SHA-256 checksum.
+After the release asset is published, update `Formula/mnemo.rb` in
+`Toady00/homebrew-tap` with the new version `url` and `sha256`, and commit it
+as `Update mnemo to X.Y.Z`. Confirm the formula resolves by upgrading, which
+re-verifies the checksum against the published asset:
+
+```bash
+brew update && brew upgrade mnemo && mnemo --version
+```
 
 ## Build A Local Binary
 
