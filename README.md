@@ -102,6 +102,7 @@ context = "user recorded voice memo"
 # Optional Hindsight retain fields. Leave unset to send null.
 # metadata = { source = "mnemo" }
 # tags = ["voice-note"]
+# observation_scopes = [["scope:platform"]]
 # strategy = "append"
 
 # Defaults to ~/.local/state/mnemo/mnemo.sock
@@ -133,6 +134,39 @@ CLI flag > MNEMO_* environment variable > macOS Keychain > config.toml
 In practice, prefer macOS Keychain for normal use and
 `MNEMO_ELEVENLABS_API_KEY` or `MNEMO_HINDSIGHT_API_KEY` for one-time setup or
 development overrides.
+
+### Observation scopes
+
+`observation_scopes` is a list of scopes, where each scope is a list of tags.
+Hindsight receives it as an array of arrays. It is sent as `null` unless you
+configure it, and it is never derived from `tags`.
+
+In the config file, write the nested array directly:
+
+```toml
+observation_scopes = [["scope:platform"], ["scope:business", "team:core"]]
+```
+
+As an environment variable, use JSON:
+
+```bash
+export MNEMO_OBSERVATION_SCOPES='[["scope:platform"],["scope:business","team:core"]]'
+```
+
+On the command line, repeat `--observation-scope` once per scope and
+comma-separate the tags within a scope:
+
+```bash
+mnemo record \
+  --observation-scope scope:platform \
+  --observation-scope scope:business,team:core
+```
+
+All three forms produce the same payload field:
+
+```json
+"observation_scopes": [["scope:platform"], ["scope:business", "team:core"]]
+```
 
 ## macOS Keychain
 
@@ -265,6 +299,7 @@ export MNEMO_CONTEXT="user recorded voice memo"
 export MNEMO_TAGS="voice-note,personal"
 export MNEMO_STRATEGY="append"
 export MNEMO_METADATA='{"source":"mnemo"}'
+export MNEMO_OBSERVATION_SCOPES='[["scope:platform"]]'
 ```
 
 ## Development

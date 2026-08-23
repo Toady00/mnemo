@@ -69,6 +69,10 @@ struct CliArgs {
     #[arg(long, global = true, value_delimiter = ',')]
     tags: Vec<String>,
 
+    /// Repeat once per observation scope. Comma-separate tags within a scope.
+    #[arg(long = "observation-scope", global = true, value_name = "TAG[,TAG...]")]
+    observation_scope: Vec<String>,
+
     #[arg(long, global = true)]
     strategy: Option<String>,
 
@@ -132,6 +136,7 @@ struct ProfileConfig {
     context: Option<String>,
     metadata: Option<BTreeMap<String, String>>,
     tags: Option<Vec<String>>,
+    observation_scopes: Option<Vec<Vec<String>>>,
     strategy: Option<String>,
 }
 
@@ -152,6 +157,7 @@ struct Config {
     context: String,
     metadata: Option<BTreeMap<String, String>>,
     tags: Option<Vec<String>>,
+    observation_scopes: Option<Vec<Vec<String>>>,
     strategy: Option<String>,
 }
 
@@ -408,6 +414,11 @@ impl Config {
             parse_tags_env(),
             profile_config.tags,
         ]);
+        let observation_scopes = first_some_vec([
+            parse_observation_scope_args(args.observation_scope)?,
+            parse_observation_scopes_env()?,
+            profile_config.observation_scopes,
+        ]);
         let strategy = first_some([
             args.strategy,
             env::var("MNEMO_STRATEGY").ok(),
@@ -430,6 +441,7 @@ impl Config {
             context,
             metadata,
             tags,
+            observation_scopes,
             strategy,
         })
     }
@@ -850,6 +862,7 @@ context = "user recorded voice memo"
 # Optional Hindsight retain settings. Leave unset to send null.
 # metadata = { source = "mnemo" }
 # tags = ["voice-note"]
+# observation_scopes = [["scope:platform"]]
 # strategy = "append"
 
 # Prefer macOS Keychain or MNEMO_ELEVENLABS_API_KEY for secrets, but config is supported.
@@ -879,7 +892,7 @@ fn first_some_metadata<const N: usize>(
     values.into_iter().flatten().find(|value| !value.is_empty())
 }
 
-fn first_some_vec<const N: usize>(values: [Option<Vec<String>>; N]) -> Option<Vec<String>> {
+fn first_some_vec<T, const N: usize>(values: [Option<Vec<T>>; N]) -> Option<Vec<T>> {
     values.into_iter().flatten().find(|value| !value.is_empty())
 }
 
@@ -895,6 +908,41 @@ fn parse_tags_env() -> Option<Vec<String>> {
     env::var("MNEMO_TAGS")
         .ok()
         .and_then(|tags| non_empty_vec(tags.split(',').map(|tag| tag.trim().to_string()).collect()))
+}
+
+fn parse_observation_scopes_env() -> Result<Option<Vec<Vec<String>>>> {
+    let Some(scopes) = env::var("MNEMO_OBSERVATION_SCOPES").ok() else {
+        return Ok(None);
+    };
+    let scopes: Vec<Vec<String>> =
+        serde_json::from_str(&scopes).context("failed to parse MNEMO_OBSERVATION_SCOPES JSON")?;
+    normalize_observation_scopes(scopes)
+}
+
+fn parse_observation_scope_args(entries: Vec<String>) -> Result<Option<Vec<Vec<String>>>> {
+    let scopes = entries
+        .into_iter()
+        .map(|entry| entry.split(',').map(|tag| tag.to_string()).collect())
+        .collect();
+    normalize_observation_scopes(scopes)
+}
+
+fn normalize_observation_scopes(scopes: Vec<Vec<String>>) -> Result<Option<Vec<Vec<String>>>> {
+    let scopes = scopes
+        .into_iter()
+        .map(|scope| {
+            let scope: Vec<String> = scope
+                .into_iter()
+                .map(|tag| tag.trim().to_string())
+                .filter(|tag| !tag.is_empty())
+                .collect();
+            if scope.is_empty() {
+                bail!("observation scopes must contain at least one tag");
+            }
+            Ok(scope)
+        })
+        .collect::<Result<Vec<Vec<String>>>>()?;
+    Ok((!scopes.is_empty()).then_some(scopes))
 }
 
 fn parse_metadata_env() -> Result<Option<BTreeMap<String, String>>> {
@@ -1323,6 +1371,7 @@ async fn retain_in_hindsight(
             "context": config.context,
             "metadata": config.metadata,
             "tags": config.tags,
+            "observation_scopes": config.observation_scopes,
             "strategy": config.strategy,
         }],
         "async": false

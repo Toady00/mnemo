@@ -18,6 +18,7 @@ context = "user recorded voice memo"
 # Optional Hindsight retain settings. Leave unset to send null.
 # metadata = { source = "mnemo" }
 # tags = ["voice-note"]
+# observation_scopes = [["scope:platform"]]
 # strategy = "append"
 
 # Prefer macOS Keychain or MNEMO_ELEVENLABS_API_KEY for secrets, but config is supported.

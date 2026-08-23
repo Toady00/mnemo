@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `observation_scopes` to the Hindsight retain payload, configurable via
+  the `observation_scopes` profile key, `MNEMO_OBSERVATION_SCOPES`, or a
+  repeatable `--observation-scope` flag.
+
 ## [0.3.0] - 2026-05-09
 
 ### Added
