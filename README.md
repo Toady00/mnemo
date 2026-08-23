@@ -428,6 +428,32 @@ cargo test
 cargo clippy -- -D warnings
 ```
 
+Scan for known vulnerabilities, leaked secrets, and misconfiguration. Address
+anything it reports before tagging:
+
+```bash
+trivy fs --scanners vuln,secret,misconfig --skip-dirs target --skip-dirs dist .
+```
+
+`target` and `dist` are skipped because they hold build output rather than
+sources. The release binary is not built with `cargo-auditable`, so scanning it
+directly yields nothing regardless.
+
+Addressing a finding does not always mean upgrading. `Cargo.lock` records the
+resolved union of optional dependencies, including ones no enabled feature ever
+activates, and Trivy reads the lockfile without knowing which features were
+selected. Confirm a flagged crate is actually reachable before acting on it:
+
+```bash
+cargo tree -i <crate> --target all -e all
+```
+
+If that prints `nothing to print`, the crate is compiled into nothing and the
+finding does not apply to the shipped binary. Upgrade anyway when a fixed
+version is available, since it costs nothing and keeps later scans quiet, but
+record the reachability result so the severity is not misread. If the crate is
+reachable, treat the finding as a release blocker.
+
 Build the release binary:
 
 ```bash
